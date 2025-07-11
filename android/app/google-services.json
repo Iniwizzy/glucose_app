@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "985617598644",
+    "firebase_url": "https://tubes-iot-1bb8c-default-rtdb.firebaseio.com",
+    "project_id": "tubes-iot-1bb8c",
+    "storage_bucket": "tubes-iot-1bb8c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:985617598644:android:e0cebebcaacbff6072afe1",
+        "android_client_info": {
+          "package_name": "com.example.glucose_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD3PSR4uMBw2-TeFaoFGUVGYWBwZBDMMXc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
