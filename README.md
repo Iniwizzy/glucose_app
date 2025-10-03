@@ -137,11 +137,6 @@ Aplikasi mendukung:
 ## 📱 Platform Support
 
 - ✅ Android
-- ✅ iOS
-- ✅ Web
-- ✅ Windows
-- ✅ macOS  
-- ✅ Linux
 
 ## 🤝 Kontribusi
 
@@ -155,15 +150,14 @@ Jika Anda ingin berkontribusi pada proyek ini:
 
 ## 📄 Lisensi
 
-Proyek ini dibuat untuk keperluan akademik - Semester 04 D3, Mata Kuliah IoT.
+Proyek ini dibuat untuk keperluan akademik Mata Kuliah IoT.
 
 ## 👥 Tim Pengembang
 
-Dikembangkan oleh mahasiswa D3 Semester 04 untuk Mata Kuliah IoT.
+Dikembangkan oleh mahasiswa Politeknik Negeri Semarang.
 
 ---
 
 **⚠️ Catatan Penting**: 
 - Aplikasi ini untuk keperluan akademik dan demonstrasi
-- Data glukosa bersifat simulasi dari sensor IoT
-- Tidak untuk penggunaan medis yang sebenarnya
+- Data glukosa dikirim dari sensor IoT
