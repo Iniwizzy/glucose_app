@@ -6,6 +6,17 @@ Aplikasi Flutter untuk monitoring kadar glukosa darah secara real-time dengan in
 
 Glucose Monitor App adalah aplikasi mobile yang dikembangkan menggunakan Flutter untuk memantau kadar glukosa darah secara real-time. Aplikasi ini menampilkan data prediksi glukosa yang diperoleh dari sensor IoT dan memberikan indikator status kesehatan berdasarkan nilai glukosa yang terbaca.
 
+## 📁 File Pengumpulan
+
+**📎 Link Google Drive untuk Pengumpulan:**
+[📂 Folder Presentasi, Poster & Aplikasi](https://drive.google.com/drive/folders/1idcnvrkvKJeZqRzD59yJl3ZDOvMM7zju?usp=sharing)
+
+Folder ini berisi:
+- 📊 File presentasi proyek
+- 🖼️ Poster proyek
+- 📱 File aplikasi (APK/Source code)
+- 📄 Dokumentasi tambahan
+
 ## ✨ Fitur Utama
 
 - **🔐 Sistem Autentikasi Lengkap**
@@ -35,7 +46,7 @@ Glucose Monitor App adalah aplikasi mobile yang dikembangkan menggunakan Flutter
   - Firebase Realtime Database (Data glukosa)
   - Firebase Core
 - **Autentikasi**: Google Sign-In
-- **Platform**: Android, iOS, Web, Windows, macOS, Linux
+- **Platform**: Android
 
 ## 📦 Dependencies Utama
 
