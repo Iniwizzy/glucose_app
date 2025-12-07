@@ -9,7 +9,7 @@ Glucose Monitor App adalah aplikasi mobile yang dikembangkan menggunakan Flutter
 ## 📁 File Pengumpulan
 
 **📎 Link Google Drive untuk Pengumpulan:**
-[📂 Folder Presentasi, Poster & Aplikasi](https://drive.google.com/drive/folders/1idcnvrkvKJeZqRzD59yJl3ZDOvMM7zju?usp=sharing)
+[📂 Folder Presentasi, Poster & Aplikasi](not published)
 
 Folder ini berisi:
 - 📊 File presentasi proyek
