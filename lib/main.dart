@@ -1,26 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'firebase_options.dart';
+import 'services/auth_service.dart';
+import 'models/glucose_record.dart';
+import 'screens/history_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/profile_screen.dart';
+import 'services/glucose_history_db.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Konfigurasi Firebase - Ganti dengan konfigurasi project Anda
-  await Firebase.initializeApp(
-    options: FirebaseOptions(
-      apiKey: 'AIzaSyD3PSR4uMBw2-TeFaoFGUVGYWBwZBDMMXc',
-      appId: '1:985617598644:android:e0cebebcaacbff6072afe1',
-      messagingSenderId: '985617598644',
-      projectId: 'tubes-iot-1bb8c',
-      databaseURL: 'https://tubes-iot-1bb8c-default-rtdb.firebaseio.com',
-      storageBucket: 'tubes-iot-1bb8c.firebasestorage.app',
-    ),
-  );
+  // Initialize Firebase with proper configuration
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -30,39 +33,106 @@ class MyApp extends StatelessWidget {
         fontFamily: 'Roboto',
         useMaterial3: true,
       ),
-      home: GlucoseMonitorScreen(),
+      home: const AuthWrapper(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class GlucoseMonitorScreen extends StatefulWidget {
+class AuthWrapper extends StatefulWidget {
+  const AuthWrapper({super.key});
+
   @override
-  _GlucoseMonitorScreenState createState() => _GlucoseMonitorScreenState();
+  State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
+class _AuthWrapperState extends State<AuthWrapper> {
+  final AuthService _authService = AuthService();
+  String? _lastSyncedUid;
+
+  Future<void> _syncProfileOnce() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid == _lastSyncedUid) return;
+    _lastSyncedUid = uid;
+    await _authService.ensureCurrentUserProfile();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: _authService.authStateChanges,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (!snapshot.hasData) {
+          _lastSyncedUid = null;
+          return LoginScreen();
+        }
+
+        // Fire-and-forget: sync profil di latar, tak blok build,
+        // tak reset state GlucoseMonitorScreen saat rebuild (mis. gesture back).
+        _syncProfileOnce();
+        return const GlucoseMonitorScreen();
+      },
+    );
+  }
+}
+
+class GlucoseMonitorScreen extends StatefulWidget {
+  const GlucoseMonitorScreen({super.key});
+
+  @override
+  State<GlucoseMonitorScreen> createState() => GlucoseMonitorScreenState();
+}
+
+class GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
     with TickerProviderStateMixin {
   final DatabaseReference _database = FirebaseDatabase.instance.ref();
+  final AuthService _authService = AuthService();
+  final GlucoseHistoryDb _historyDb = GlucoseHistoryDb.instance;
+  StreamSubscription<DatabaseEvent>? _glucoseSubscription;
   double glucoseValue = 0.0;
   String glucoseStatus = "Normal";
   bool isLoading = true;
+  bool _historyLoading = true;
+  List<GlucoseRecord> _recentHistory = [];
+  double? _lastSavedValue;
+  DateTime? _lastSavedAt;
 
   late AnimationController _pulseController;
   late AnimationController _rotationController;
   late Animation<double> _pulseAnimation;
   late Animation<double> _rotationAnimation;
 
-  // Color palette
-  static const Color primaryColor = Color(0xFFF46666); // Coral pink
-  static const Color secondaryColor = Color(0xFFFFD6D6); // Light cream
-  static const Color accentColor = Color(0xFFCB3305); // Deep orange
+  static const Color primaryColor = Color(
+    0xFFB71C1C,
+  ); // Bold Red (strong glucose indicator)
+  static const Color secondaryColor = Color(0xFFFDECEC); // Light Red Background
+  static const Color accentColor = Color(0xFF2E7D32); // Healthy Green
 
   @override
   void initState() {
     super.initState();
     _initAnimations();
     _listenToGlucoseData();
+    _initHistory();
+  }
+
+  Future<void> _initHistory() async {
+    final userId = _currentUserId;
+    if (userId != null) {
+      try {
+        await _historyDb.enforceRetentionPolicy(userId: userId, days: 90);
+      } catch (e) {
+        debugPrint('Retention policy failed: $e');
+      }
+    }
+
+    await _loadRecentHistory();
   }
 
   void _initAnimations() {
@@ -88,30 +158,93 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
 
   @override
   void dispose() {
+    _glucoseSubscription?.cancel();
     _pulseController.dispose();
     _rotationController.dispose();
     super.dispose();
   }
 
+  String? get _currentUserId => FirebaseAuth.instance.currentUser?.uid;
+
   void _listenToGlucoseData() {
-    _database
+    _glucoseSubscription?.cancel();
+    _glucoseSubscription = _database
         .child('glucose_predict/prediction')
         .onValue
-        .listen((event) {
-          if (event.snapshot.exists) {
+        .listen(
+          (event) async {
+            if (!event.snapshot.exists) return;
+
+            final newValue = double.tryParse(event.snapshot.value.toString());
+            if (newValue == null) return;
+
+            final newStatus = _getGlucoseStatus(newValue);
+
+            if (!mounted) return;
             setState(() {
-              glucoseValue = double.parse(event.snapshot.value.toString());
-              glucoseStatus = _getGlucoseStatus(glucoseValue);
+              glucoseValue = newValue;
+              glucoseStatus = newStatus;
               isLoading = false;
             });
-          }
-        })
-        .onError((error) {
-          print("Error listening to Firebase: $error");
-          setState(() {
-            isLoading = false;
-          });
-        });
+
+            await _saveHistory(newValue, newStatus);
+          },
+          onError: (error) {
+            debugPrint("Error listening to Firebase: $error");
+            if (!mounted) return;
+            setState(() {
+              isLoading = false;
+            });
+          },
+        );
+  }
+
+  Future<void> _saveHistory(double value, String status) async {
+    final userId = _currentUserId;
+    if (userId == null) return;
+
+    final now = DateTime.now();
+    final shouldSkipDuplicate =
+        _lastSavedValue == value &&
+        _lastSavedAt != null &&
+        now.difference(_lastSavedAt!).inSeconds < 3;
+    if (shouldSkipDuplicate) return;
+
+    _lastSavedValue = value;
+    _lastSavedAt = now;
+
+    await _historyDb.insertRecord(
+      GlucoseRecord(
+        userId: userId,
+        value: value,
+        status: status,
+        source: 'firebase_rtdb',
+        notes: 'Auto saved from live prediction stream',
+        measuredAt: now,
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadRecentHistory();
+  }
+
+  Future<void> _loadRecentHistory() async {
+    final userId = _currentUserId;
+    if (userId == null) {
+      if (!mounted) return;
+      setState(() {
+        _historyLoading = false;
+        _recentHistory = [];
+      });
+      return;
+    }
+
+    final records = await _historyDb.getRecentRecords(userId, limit: 5);
+    if (!mounted) return;
+    setState(() {
+      _recentHistory = records;
+      _historyLoading = false;
+    });
   }
 
   String _getGlucoseStatus(double value) {
@@ -214,6 +347,251 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
           ],
         );
       },
+    );
+  }
+
+  Future<void> _logout() async {
+    try {
+      await _authService.signOut();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Berhasil keluar dari akun'),
+          backgroundColor: accentColor,
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Gagal keluar dari akun: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _showLogoutDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          backgroundColor: secondaryColor,
+          title: Text(
+            "Konfirmasi Keluar",
+            style: TextStyle(
+              color: primaryColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+          content: Text(
+            "Apakah Anda yakin ingin keluar dari akun?",
+            style: TextStyle(fontSize: 16, color: accentColor.withOpacity(0.8)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.grey.withOpacity(0.1),
+                foregroundColor: Colors.grey[600],
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  "Batal",
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _logout();
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: primaryColor.withOpacity(0.1),
+                foregroundColor: primaryColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  "Keluar",
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openHistoryScreen() {
+    final userId = _currentUserId;
+    if (userId == null) return;
+
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => HistoryScreen(userId: userId)));
+  }
+
+  void _openProfileScreen() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const ProfileScreen()));
+  }
+
+  Widget _buildRecentHistoryCard() {
+    return Container(
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.white.withOpacity(0.92),
+            Colors.white.withOpacity(0.65),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: primaryColor.withOpacity(0.3), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: primaryColor.withOpacity(0.15),
+            blurRadius: 15,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'HISTORY TERBARU',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: accentColor.withOpacity(0.8),
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Tersimpan di SQLite lokal',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: accentColor.withOpacity(0.65),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+              TextButton(
+                onPressed: _openHistoryScreen,
+                child: Text('Lihat semua'),
+              ),
+            ],
+          ),
+          SizedBox(height: 14),
+          if (_historyLoading)
+            Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+            )
+          else if (_recentHistory.isEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Belum ada riwayat yang tersimpan.',
+                style: TextStyle(
+                  color: accentColor.withOpacity(0.7),
+                  fontSize: 14,
+                ),
+              ),
+            )
+          else
+            Column(
+              children:
+                  _recentHistory
+                      .map(
+                        (record) => Container(
+                          margin: EdgeInsets.only(bottom: 10),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(
+                              record.status,
+                            ).withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: _getStatusColor(
+                                record.status,
+                              ).withOpacity(0.15),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  color: _getStatusColor(record.status),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${record.value.toStringAsFixed(0)} mg/dL',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: accentColor,
+                                      ),
+                                    ),
+                                    SizedBox(height: 2),
+                                    Text(
+                                      '${record.status} • ${record.measuredAt.toLocal()}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: accentColor.withOpacity(0.7),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+            ),
+        ],
+      ),
     );
   }
 
@@ -329,7 +707,7 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
         child: SafeArea(
           child: CustomScrollView(
             slivers: [
-              // Custom App Bar - Centered Title Only
+              // Custom App Bar - With User Info and Logout
               SliverAppBar(
                 backgroundColor: Colors.transparent,
                 elevation: 0,
@@ -337,15 +715,130 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
                 snap: true,
                 automaticallyImplyLeading: false, // Remove back button
                 centerTitle: true,
-                title: Text(
-                  "Glucose Monitor",
-                  style: TextStyle(
-                    color: accentColor,
-                    fontSize: isSmallScreen ? 20 : 24,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                  ),
+                title: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Image.asset(
+                      'assets/images/gluver_licon.png',
+                      height: 28,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      "GLUVER",
+                      style: TextStyle(
+                        color: accentColor,
+                        fontSize: isSmallScreen ? 20 : 24,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
                 ),
+                actions: [
+                  Container(
+                    margin: EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [accentColor, primaryColor],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(25),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accentColor.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(25),
+                        onTap: _openHistoryScreen,
+                        child: Container(
+                          padding: EdgeInsets.all(12),
+                          child: Icon(
+                            Icons.history,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    margin: EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [accentColor, primaryColor],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(25),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accentColor.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(25),
+                        onTap: _openProfileScreen,
+                        child: Container(
+                          padding: EdgeInsets.all(12),
+                          child: Icon(
+                            Icons.person,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    margin: EdgeInsets.only(right: 16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [primaryColor, accentColor],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(25),
+                      boxShadow: [
+                        BoxShadow(
+                          color: primaryColor.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(25),
+                        onTap: _showLogoutDialog,
+                        child: Container(
+                          padding: EdgeInsets.all(12),
+                          child: Icon(
+                            Icons.logout,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
 
               // Main Content
@@ -623,6 +1116,10 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
 
                       SizedBox(height: 30),
 
+                      _buildRecentHistoryCard(),
+
+                      SizedBox(height: 30),
+
                       // Recommendation Buttons
                       Container(
                         padding: EdgeInsets.all(20),
@@ -720,6 +1217,7 @@ class _GlucoseMonitorScreenState extends State<GlucoseMonitorScreen>
                                       isLoading = true;
                                     });
                                     _listenToGlucoseData();
+                                    _loadRecentHistory();
                                   },
                                   child: Container(
                                     width: 80,

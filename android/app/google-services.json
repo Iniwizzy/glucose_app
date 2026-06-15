@@ -13,7 +13,20 @@
           "package_name": "com.example.glucose_app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "985617598644-p3gb7vp0lq58e2autka9800pbirdg76e.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.glucose_app",
+            "certificate_hash": "606388b0c577eb9642f81d05879ffc9fa9a21aad"
+          }
+        },
+        {
+          "client_id": "985617598644-8748t8lqhdrcqki0h85r0rga4c4tojrm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyD3PSR4uMBw2-TeFaoFGUVGYWBwZBDMMXc"
@@ -21,7 +34,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "985617598644-8748t8lqhdrcqki0h85r0rga4c4tojrm.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
